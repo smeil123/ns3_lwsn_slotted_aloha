@@ -30,6 +30,8 @@
 #include "ns3/tag.h"
 #include "ns3/simulator.h"
 #include "ns3/drop-tail-queue.h"
+#include <cstdlib>
+#include <ns3/object.h>
 
 namespace ns3 {
 
@@ -215,6 +217,11 @@ SimpleNetDevice::GetTypeId (void)
                      "by the device during reception",
                      MakeTraceSourceAccessor (&SimpleNetDevice::m_phyRxDropTrace),
                      "ns3::Packet::TracedCallback")
+    .AddAttribute ("temp_packet",
+                   "A queue to use as the transmit queue in the device.",
+                   StringValue ("ns3::DropTailQueue"),
+                   MakePointerAccessor (&SimpleNetDevice::temp_queue),
+                   MakePointerChecker<Queue> ())
   ;
   return tid;
 }
@@ -227,178 +234,316 @@ SimpleNetDevice::SimpleNetDevice ()
     m_linkUp (false)
 {
   NS_LOG_FUNCTION (this);
-  ndid = 0;
+  rack_flag = false;
+  lack_flag = false;
+  round = 3;
+  k = 1;
   send_flag = false;
-  sch_flag = false;
+  m_txPacket = 0;
+  wait_ack = false;
   receive_flag = false;
   receive_flag_1 = false;
-  n_count = 0;
-  n_ncCount = 0;  
+  last_node = false;
+  ndid = 1;
+  m_count = 0;
+  m_retrans_count = 0;
+  m_collision = 0;
+  temp_flag = true;
+  txarray[0]=0;
+  txarray[1]=0;
+  minTime = 0;
+  g_receive = 0;
 }
 
 void
-SimpleNetDevice::SetN_node(uint16_t x){
-  n_node = x;
-  
-  for(int i =0;i<n_node;i++){
-    m_rxArray[i] = 0;
-    m_rxArrayPacket[i] = 0;
-  }
+SimpleNetDevice::SetTxPacket(Ptr<Packet> p){
+  m_txPacket = p;
+}
 
-  if(x%3 == 0){
-    timeslot = (x/3)*9;
-  }
-  else{
-    timeslot = (x/3)*9+1;
-  }
-  int delay=Simulator::Now().GetSeconds();
-  int slot=0;
-  if(delay==0){
-    slot=0;
-  }
-  else{
-    slot=delay%timeslot;
-  }
-  end_flag = true;    
-  Simulator::Schedule(Seconds(timeslot-slot-0.1),&SimpleNetDevice::EndSchedule,this);
+Ptr<Packet>
+SimpleNetDevice::GetTxPacket(void) const{
+  return m_txPacket;
 }
 
 void
-SimpleNetDevice::SetSid(uint16_t sid){
-	m_sid=sid;
+SimpleNetDevice::SetRound(int x){
+	round = x;
 }
 
-uint16_t
-SimpleNetDevice::GetSid(){
-	return m_sid;
-}
 void
-SimpleNetDevice::SetGid(uint16_t gid){
-  m_gid=gid;
+SimpleNetDevice::SetLastNode(bool x){
+	last_node = x;
 }
 
-uint16_t
-SimpleNetDevice::GetGid(){
-  return m_gid;
-}
 void
-SimpleNetDevice::SetSideAddress(Address laddress, Address raddress){
-  l_address=Mac48Address::ConvertFrom (laddress);
-  r_address=Mac48Address::ConvertFrom (raddress);
-}                  
-
-/*void
-SimpleNetDevice::ReceiveStart(Ptr<Packet> packet, uint16_t protocol,Mac48Address to, Mac48Address from)
+SimpleNetDevice::ReceiveStart(Ptr<Packet> packet, uint16_t protocol,
+                          Mac48Address to, Mac48Address from)
 {
-  if(!end_flag){
-    int delay=Simulator::Now().GetSeconds();
-    int slot=0;
-    if(delay==0){
-      slot=0;
-    }
-    else{
-      slot=delay%timeslot;
-    }     
-    Simulator::Schedule(Seconds(timeslot-slot),&SimpleNetDevice::EndSchedule,this);
-    end_flag = true;
+        if (to == m_address){ 
+	        if(receive_flag==true){
+		        receive_flag_1 = true;
+	        }else{
+		        receive_flag = true;
+                        Simulator::Schedule(Seconds(0.9),&SimpleNetDevice::ReceiveCheck,this,packet,protocol,to,from);
+	        }
+	}
+
+}
+
+void
+SimpleNetDevice::ReceiveCheck(Ptr<Packet> packet, uint16_t protocol,
+                          Mac48Address to, Mac48Address from)
+{
+	if(receive_flag_1==false){
+		Simulator::ScheduleNow(&SimpleNetDevice::Receive,this,packet,protocol,to,from);
+	}
+  else{
+    m_collision++;
+    NS_LOG_FUNCTION("Sid : "<<m_sid<<"collison!");
   }
 
-  Simulator::Schedule(Second(1.0),&SimpleNetDevice::Receive,this,packet,protocol,to,from);
-}*/
+	receive_flag = false;
+	receive_flag_1 = false;
+}
 
 void
 SimpleNetDevice::Receive (Ptr<Packet> packet, uint16_t protocol,
                           Mac48Address to, Mac48Address from)
 {
+//  NS_LOG_FUNCTION (this << packet << protocol << to << from);
+  NetDevice::PacketType packetType;
 
   if (m_receiveErrorModel && m_receiveErrorModel->IsCorrupt (packet) )
     {
       m_phyRxDropTrace (packet);
       return;
     }
+  if (to == m_address && send_flag==false)
+    {
 
-  if (to == m_address)   
-    { 
+      packetType = NetDevice::PACKET_HOST;
+  	  
+  	  Ptr<Packet> p = packet->Copy ();
 
+      LwsnHeader receiveheader;
+      p ->PeekHeader(receiveheader);
 
-      /*
-        m_rxArray[] == 0 : no receive packet
-        m_rxArray[] == 1 : receive packet
-        m_rxArray[] == 2 : receive & send packet
-      */
-      LwsnHeader receiveHeader;
-
-      if(m_sid==0){
-        packet->RemoveHeader(receiveHeader);
-        receiveHeader.SetStartTime2(Simulator::Now().GetSeconds()-receiveHeader.GetStartTime()+1);
-
-        NS_LOG_UNCOND("");
-        NS_LOG_UNCOND("---------------------------");
-        NS_LOG_UNCOND("Gid"<<m_gid<<"  Osid : "<<receiveHeader.GetOsid());
-        NS_LOG_UNCOND(Simulator::Now().GetSeconds()+1<< "s : "<<"Start time : " << receiveHeader.GetStartTime() <<"  Total Time : " << Simulator::Now().GetSeconds()-receiveHeader.GetStartTime()+1); 
-        NS_LOG_UNCOND("---------------------------");
-        NS_LOG_UNCOND("");
-
-        packet->AddHeader(receiveHeader);
-        m_queue->Enqueue(Create<QueueItem> (packet));
-        return;   
-      }
-
-      packet->PeekHeader(receiveHeader);
-
-      if(!end_flag){
-        int temp = 0;
-        /*int temp = Simulator::Now().GetSeconds();
-        slot=temp%timeslot;*/
-        temp = Simulator::Now().GetSeconds()/timeslot;
-        NS_LOG_FUNCTION("Sid " <<m_sid << "delay "<<timeslot-(Simulator::Now().GetSeconds()-temp*timeslot));
-        Simulator::Schedule(Seconds(timeslot-(Simulator::Now().GetSeconds()-temp*timeslot)-0.1),&SimpleNetDevice::EndSchedule,this);
-          
-        end_flag = true;
-      }
-
-      if(receiveHeader.GetType() == LwsnHeader::NETWORK_CODING){
-        Ptr<Packet> p = decoding(packet);
-        p->PeekHeader(receiveHeader);
-
-        if(m_rxArray[receiveHeader.GetOsid()-1] == 0 ){
-          m_rxArray[receiveHeader.GetOsid()-1] = 1;
-          m_rxArrayPacket[receiveHeader.GetOsid()-1] = p->Copy();
-
-          NS_LOG_FUNCTION ("-----------Networkcoding-------------"); 
-          NS_LOG_FUNCTION ("SID  : " <<this->GetSid() << "from->"  <<from << "   Osid->"<<receiveHeader.GetOsid());
-          NS_LOG_FUNCTION("");
-          SendSchedule(p,from);
-        }
-      }
-      else{
-
-        if(m_rxArray[receiveHeader.GetOsid()-1] == 0 ){
-          m_rxArray[receiveHeader.GetOsid()-1] = 1;
-          m_rxArrayPacket[receiveHeader.GetOsid()-1] = packet->Copy();
-
-          if(receiveHeader.GetType() == LwsnHeader::ORIGINAL_TRANSMISSION){
-            NS_LOG_FUNCTION ("-----------OriginalTransmission-------------"); 
-            NS_LOG_FUNCTION ("SID  : " <<this->GetSid() << "from->"  <<from << "   Osid->"<<receiveHeader.GetOsid());
+      NS_LOG_FUNCTION ("Sid -> " << this->GetSid() << ": from -> " <<receiveheader.GetPsid() << "Packet Type :" << receiveheader.GetType());
+      NS_LOG_FUNCTION("Sid->" <<m_sid << "Did -> "<<receiveheader.GetDid());
+      
+      if(this->GetSid()==0){
         
-            SendSchedule(packet,from);
+        if(receiveheader.GetType() == LwsnHeader::ORIGINAL_TRANSMISSION || receiveheader.GetType() == LwsnHeader::FORWARDING){
+          /*g_receive++;
+          for(uint16_t i =0; i<m_queue->GetNPackets(); i++){
+            Ptr<Packet> temp = temp_queue->Dequeue()->GetPacket ();
+            LwsnHeader tempheader;
+            temp-> PeekHeader(tempheader);
+            if(tempheader.GetOsid() == receiveheader.GetOsid()){
+              if(tempheader.GetDid() == receiveheader.GetDid() ){
+                NS_LOG_UNCOND("GateWay" << m_gid<<" already receive");
+                return;
+              }
+            }
           }
-          else if(receiveHeader.GetType() == LwsnHeader::FORWARDING){
-            NS_LOG_FUNCTION ("-----------Forwarding-------------"); 
-            NS_LOG_FUNCTION ("SID  : " <<this->GetSid() << "from->"  <<from << "   Osid->"<<receiveHeader.GetOsid());
-            SendSchedule(packet,from);
-          }
-          else{
-            NS_LOG_FUNCTION("SID : "<<receiveHeader.GetType());
-          
-          }
+          m_queue->Enqueue(Create<QueueItem> (packet));*/
+          g_receive++;
+          int pre = m_queue->GetNPackets();
+          QueueCheck(packet);
+          int post = m_queue->GetNPackets();
 
+          if(pre<post){
+
+    	 	    //int time = Simulator::Now().GetSeconds();
+          	NS_LOG_UNCOND("---------------------------------------");
+          	NS_LOG_UNCOND("GateWay "<<m_gid<< " : Receive Sid ->"<<receiveheader.GetOsid() << " Did ->"<<receiveheader.GetDid());
+            NS_LOG_UNCOND("Start Time : "<<receiveheader.GetStartTime());
+            //NS_LOG_UNCOND("Total Time : "<<time-receiveheader.GetStartTime()+1);
+          	NS_LOG_UNCOND("Total Time : "<<receiveheader.GetStartTime2());
+          	NS_LOG_UNCOND("---------------------------------------");
+          }
         }
-
-        
+ 
+      	return;
       }
+
+      if(receiveheader.GetType() == LwsnHeader::ORIGINAL_TRANSMISSION){    
+
+      	if(wait_ack == false){
+      		send_flag = true;
+      		
+      		if(from == m_raddress){
+	      		//ack send
+	      		Simulator::Schedule(Seconds(0.1),&SimpleNetDevice::AckSend,this,packet,protocol,m_raddress);
+		      	//forwarding
+		      	//NS_LOG_UNCOND("Sid ->"<<this->GetSid()<<"Forwading to "<<m_laddress);
+		      	Simulator::Schedule(Seconds(0.1),&SimpleNetDevice::Forwarding,this,packet,protocol,m_laddress); 		
+	      	}
+
+	      	else if(from == m_laddress){
+	      		//ack send
+	      		Simulator::Schedule(Seconds(1.1),&SimpleNetDevice::AckSend,this,packet,protocol,m_laddress);
+  	   			//forwarding
+  	   			//NS_LOG_UNCOND("Sid ->"<<this->GetSid()<<"Forwading to "<<m_raddress);
+  	     		Simulator::Schedule(Seconds(1.1),&SimpleNetDevice::Forwarding,this,packet,protocol,m_raddress);
+	      	}
+		}
+	 	else{
+			NS_LOG_UNCOND("Sid ->" << this->GetSid() << " not receive ");
+			 if(m_txPacket != 0){
+	                Ptr<Packet> temp = m_txPacket -> Copy();
+	                LwsnHeader tempheader;
+	                temp -> PeekHeader(tempheader);
+	                //temp->AddHeader(tempheader);
+
+	                if(tempheader.GetDid() != receiveheader.GetDid() || tempheader.GetOsid()!= receiveheader.GetOsid()){
+	                                          
+	                    if(m_queue->GetNPackets () > 0){
+			         		     //  Ptr<Packet> queue_packet = m_queue->Peek()->GetPacket ();
+			           		   //  LwsnHeader tempheader_1;
+			           		   //  queue_packet->PeekHeader(tempheader_1);
+	                  //       //queue_packet->AddHeader(tempheader_1);
+
+      			        		// if(tempheader_1.GetDid()!=receiveheader.GetDid() || tempheader_1.GetOsid()!=receiveheader.GetOsid()){
+      			          //     	    m_queue->Enqueue (Create<QueueItem> (packet));
+      			          //      	}
+
+                        QueueCheck(packet);
+      			         	}
+      			           	else{
+      			               	m_queue->Enqueue (Create<QueueItem> (packet));
+      			            }       
+      	              }
+      	            }
+	            //m_txPacket == 0 
+	            else{
+                QueueCheck(packet);
+	              //   if(m_queue->GetNPackets () > 0){
+			       		   //  Ptr<Packet> queue_packet = m_queue->Peek()->GetPacket ();
+			            //   LwsnHeader tempheader_1;
+			            //   queue_packet->PeekHeader(tempheader_1);
+	              //       //queue_packet->AddHeader(tempheader_1);
+			            //   if(tempheader_1.GetDid()!=receiveheader.GetDid() || tempheader_1.GetOsid()!=receiveheader.GetOsid()){
+			            //     m_queue->Enqueue (Create<QueueItem> (packet));
+			           	//   }
+			       	    //  }
+    			        // else{
+    			        //    	m_queue->Enqueue (Create<QueueItem> (packet));
+    			       	//}
+	            }           
+		     }
+	  }
+	
+       else if(receiveheader.GetType() == LwsnHeader::IACK){
+      	//본인이 원전송 혹은 재전송한 패킷을 나중에 다시 받을 수 있으니까 그때 큐를 확인하고 큐에서 제거 필요 
+	        
+	        //받아야하는 ACK가 있는 경우       
+       		if(wait_ack){
+       			Ptr<Packet> temp = m_txPacket->Copy();
+	            LwsnHeader tempheader;
+	            temp -> PeekHeader(tempheader);
+
+	            if(tempheader.GetDid() == receiveheader.GetDid() && tempheader.GetOsid() == receiveheader.GetOsid()){
+			         NS_LOG_UNCOND("Sid-> "<<this->GetSid()<<"  ACK RECEIVE");
+			         AckReceive(true,from);
+			         //Simulator::ScheduleNow(&SimpleNetDevice::AckReceive,this,true,from);
+			         //Simulator::Schedule(Seconds(1.0),&SimpleNetDevice::SetSleep,this);
+			    }
+    			    else{
+    			        NS_LOG_UNCOND("Sid ->" << this->GetSid() <<" not except packet,did"<<tempheader.GetDid());
+    			    }
+       		}
+       		else{
+       			if(m_queue->GetNPackets() > 0){
+		        	Ptr<Packet> queue_packet = m_queue->Peek()->GetPacket ();
+				      LwsnHeader tempheader_1;
+				      queue_packet->PeekHeader(tempheader_1);
+	                //queue_packet->AddHeader(tempheader_1);
+  				    if(tempheader_1.GetDid()==receiveheader.GetDid() && tempheader_1.GetOsid()==receiveheader.GetOsid()){
+  				        queue_packet = m_queue->Dequeue()->GetPacket();
+  				    }
+		        }
+       		}
+	  }
+
+      else if(receiveheader.GetType() == LwsnHeader::FORWARDING){
+      	if(wait_ack == false){
+      		if(m_queue->GetNPackets () > 0){
+		        Ptr<Packet> queue_packet = m_queue->Peek()->GetPacket ();
+		        LwsnHeader tempheader_1;
+		        queue_packet->PeekHeader(tempheader_1);
+
+		        if(tempheader_1.GetDid()==receiveheader.GetDid()&&tempheader_1.GetOsid()==receiveheader.GetOsid()){
+				      queue_packet = m_queue->Dequeue()->GetPacket();
+		        }   
+          }
+      	send_flag = true;
+		    if(from == m_raddress){
+		  		//ack send
+		      Simulator::Schedule(Seconds(0.1),&SimpleNetDevice::AckSend,this,packet,protocol,m_raddress);
+		  		//forwarding
+		   		Simulator::Schedule(Seconds(0.1),&SimpleNetDevice::Forwarding,this,packet,protocol,m_laddress);
+		    }
+		    else if(from == m_laddress){
+		      //ack send
+		      Simulator::Schedule(Seconds(0.1),&SimpleNetDevice::AckSend,this,packet,protocol,m_laddress);
+		      //forwarding
+		      Simulator::Schedule(Seconds(0.1),&SimpleNetDevice::Forwarding,this,packet,protocol,m_raddress);
+		    }
+		 }
+		 // ack를 기다리는 중일 경우, 패킷을 받는다?
+		 else{
+		    if(m_txPacket != 0){
+                Ptr<Packet> temp = m_txPacket -> Copy();
+                LwsnHeader tempheader;
+                temp -> PeekHeader(tempheader);
+                //temp->AddHeader(tempheader);
+                // 받아야 하는 패킷이면 큐에 넣는다 
+                if(tempheader.GetDid() != receiveheader.GetDid() || tempheader.GetOsid()!= receiveheader.GetOsid()){
+                                         
+                    if(m_queue->GetNPackets () > 0){
+		         		     //  Ptr<Packet> queue_packet = m_queue->Peek()->GetPacket ();
+		               	//   LwsnHeader tempheader_1;
+		               	//   queue_packet->PeekHeader(tempheader_1);
+                  //       //p->AddHeader(tempheader_1);
+
+		                // if(tempheader_1.GetDid()!=receiveheader.GetDid()||tempheader_1.GetOsid()!=receiveheader.GetOsid()){
+                  //           m_queue->Enqueue (Create<QueueItem> (packet));                                
+		                //  }
+                      QueueCheck(packet);
+		             }
+    		            else{
+    		                m_queue->Enqueue (Create<QueueItem> (packet));
+    		            }       
+                }
+            }
+            else{
+          //       if(m_queue->GetNPackets () > 0){
+  		      //     	Ptr<Packet> queue_packet = m_queue->Peek()->GetPacket ();
+  		      //       LwsnHeader tempheader_1;
+  		      //       queue_packet->PeekHeader(tempheader_1);
+          //             //p->AddHeader(tempheader_1);
+  		      //       if(tempheader_1.GetDid()!=receiveheader.GetDid()||tempheader_1.GetOsid()!=receiveheader.GetOsid()){
+  		      //           m_queue->Enqueue (Create<QueueItem> (packet));
+  		      //       }
+		        // }
+    		    //     else{
+    		    //         m_queue->Enqueue (Create<QueueItem> (packet));
+    		    //     }
+              QueueCheck(packet);
+            }           
+		}
     }
-  /*else if (to.IsBroadcast ())
+      else {
+      		NS_LOG_UNCOND("UNDEFINE HEADER TYPE");
+      		}
+   	 	
+	}else if(to == m_address && send_flag){
+    m_collision++;
+  }
+
+
+  else if (to.IsBroadcast ())
     {
       packetType = NetDevice::PACKET_BROADCAST;
     }
@@ -419,7 +564,7 @@ SimpleNetDevice::Receive (Ptr<Packet> packet, uint16_t protocol,
   if (!m_promiscCallback.IsNull ())
     {
       m_promiscCallback (this, packet, protocol, from, to, packetType);
-    }*/
+    }
 }
 
 void 
@@ -483,7 +628,7 @@ SimpleNetDevice::GetAddress (void) const
   //
   // Implicit conversion from Mac48Address to Address
   //
-  NS_LOG_FUNCTION (this);
+  //NS_LOG_FUNCTION (this);
   return m_address;
 }
 bool 
@@ -567,545 +712,804 @@ SimpleNetDevice::IsBridge (void) const
   NS_LOG_FUNCTION (this);
   return false;
 }
-
-Ptr<Packet>
-SimpleNetDevice::encoding(Ptr<Packet> p1,Ptr<Packet> p2)
+void
+SimpleNetDevice::SetSid(uint16_t sid)
 {
-  LwsnHeader temp1;
-  p1 -> RemoveHeader(temp1);
-
-  LwsnHeader temp2;
-  p2 -> RemoveHeader(temp2);
-
-  Ptr<Packet> ncpacket = Create<Packet> (100);
-  LwsnHeader ncHeader;
-
-  ncHeader.SetType(LwsnHeader::NETWORK_CODING);
-  ncHeader.SetOsid(temp1.GetOsid());
-  ncHeader.SetDid(temp1.GetDid());
-  ncHeader.SetPsid(m_sid);
-  ncHeader.SetStartTime(temp1.GetStartTime());
-  ncHeader.SetE(1);
-
-  ncHeader.SetOsid2(temp2.GetOsid());
-  ncHeader.SetDid2(temp2.GetDid());
-  ncHeader.SetStartTime2(temp2.GetStartTime());
-
-  ncpacket->AddHeader(ncHeader);
-
-  NS_LOG_FUNCTION("Sid : "<<this->GetSid()<< "  packet encoding, get Osid_1 -> "<<ncHeader.GetOsid() << "Osid_2 ->"<<ncHeader.GetOsid2());
-
-  return ncpacket;
+	m_sid = sid;
 }
 
-Ptr<Packet>
-SimpleNetDevice::decoding(Ptr<Packet> p)
+uint16_t
+SimpleNetDevice::GetSid()
 {
-  LwsnHeader tempheader;
-  p -> RemoveHeader(tempheader);
-
-  /*
-    if(m_rxArray[]==0) -> no receive packet
-  */
-NS_LOG_FUNCTION("Sid : "<<m_sid<<"Osid_1" << m_rxArray[tempheader.GetOsid()-1] <<"   Osid_2" <<m_rxArray[tempheader.GetOsid2()-1]);
-  if(m_rxArray[tempheader.GetOsid()-1]>0){
-    Ptr<Packet> packet = Create<Packet> (100);
-    LwsnHeader sendHeader;
-
-    sendHeader.SetType(LwsnHeader::FORWARDING);
-    sendHeader.SetOsid(tempheader.GetOsid2());
-    sendHeader.SetDid(tempheader.GetDid2());
-    sendHeader.SetPsid(tempheader.GetPsid());
-    sendHeader.SetStartTime(tempheader.GetStartTime2());
-    sendHeader.SetE(1);
-
-  NS_LOG_FUNCTION("GetStartTime"<<tempheader.GetStartTime());
-
-    packet->AddHeader(sendHeader);
-
-    NS_LOG_FUNCTION("Sid : "<<this->GetSid()<< "  packet decoding, get Osid -> "<<sendHeader.GetOsid());
-
-    return packet;
-  }
-  else if(m_rxArray[tempheader.GetOsid2()-1]>0){
-    Ptr<Packet> packet = Create<Packet> (100);
-    LwsnHeader sendHeader;
-
-    sendHeader.SetType(LwsnHeader::FORWARDING);
-    sendHeader.SetOsid(tempheader.GetOsid());
-    sendHeader.SetDid(tempheader.GetDid());
-    sendHeader.SetPsid(tempheader.GetPsid());
-    sendHeader.SetStartTime(tempheader.GetStartTime());
-    sendHeader.SetE(1);
-  NS_LOG_FUNCTION("GetStartTime"<<tempheader.GetStartTime());
-
-    packet->AddHeader(sendHeader);
-    NS_LOG_FUNCTION("Sid : "<<this->GetSid()<< "  packet decoding, get Osid -> "<<sendHeader.GetOsid());
-
-    return packet;
-  }
-  return p;
+	return m_sid;
 }
 
 void
-SimpleNetDevice::NetworkCoding(int x, int y)
+SimpleNetDevice::SetGid(int x)
 {
-  n_ncCount++;
-  Ptr<Packet> ncpacket;
+	m_gid = x;
+}
 
-  Ptr<Packet> p1 = m_rxArrayPacket[x]->Copy();
-  Ptr<Packet> p2 = m_rxArrayPacket[y]->Copy();
-
-  ncpacket = encoding(p1,p2);
-
-  NS_LOG_FUNCTION("");
-  NS_LOG_FUNCTION ("SID  : " <<m_sid);
-  NS_LOG_FUNCTION("");
-
-  ChannelSend(ncpacket,0,l_address,m_address);
-  ChannelSend(ncpacket,0,r_address,m_address);
-
-  m_rxArray[x] = 2;
-  m_rxArray[y] = 2;
+int
+SimpleNetDevice::GetGid()
+{
+	return m_gid;
 }
 
 void
-SimpleNetDevice::SendCheck(Ptr<Packet> p,int n, bool flag,int x, int y){
+SimpleNetDevice::SetSideAddress(Address laddress,Address raddress)
+{
+	m_laddress = Mac48Address::ConvertFrom(laddress);
+	m_raddress = Mac48Address::ConvertFrom(raddress);
+}
 
-  int number = 0;
-  double a = 0;
+Mac48Address
+SimpleNetDevice::GetLaddress()
+{
+	return m_laddress;
+}
 
-  /*
-    if receive_flag == receive_flag_1 == flag == true -> network coding
-    else -> forwarding
-  */
-  if(receive_flag){
-    if(receive_flag_1){
-      if(flag){
-        number = n;
-        receive_flag_1 = receive_flag = false;
-      }
-    }
-    else{
-      if(!flag){
-        number = n;
-        receive_flag_1 = receive_flag = false;
-        a = 0.1;
-      }
-    }
-  }
-  else{
-    if(flag){
-      number = n;
-      receive_flag_1 = receive_flag = false;
-    }
-  }
+Mac48Address
+SimpleNetDevice::GetRaddress()
+{
+	return m_raddress;
+}
 
-  if(x != 100){
-    m_rxArray[x] = 2;
-  }
-  if(y != 100){
-    m_rxArray[y] = 2;
-  }
+void
+SimpleNetDevice::AckReceive(bool x,Mac48Address from)
+{
+	if(from == m_raddress){
+    rack_flag = x;
+	}
+	else if(from == m_laddress){
+    lack_flag = x;
+	}
+	return ;
+}
+void
+SimpleNetDevice::AckSend(Ptr <Packet> p, uint16_t protocol,Mac48Address to)
+{
+	NS_LOG_FUNCTION("Sid -> " << this->GetSid() <<"AckSend  to " << to);
+	send_flag = true;
 
-  if(number==2){
-    if(m_sid %3 == 2){
-      Simulator::Schedule(Seconds(2.0-a),&SimpleNetDevice::NetworkCoding,this,x,y);
-    }
-    else if(m_sid%3 == 1){
-      Simulator::Schedule(Seconds(1.0-a),&SimpleNetDevice::NetworkCoding,this,x,y);
-    }
-    else{
-      Simulator::Schedule(Seconds(4.0-a),&SimpleNetDevice::NetworkCoding,this,x,y);
-    }
-  }
-  else if(number==1){
+  Ptr<Packet> ackpacket =p->Copy();
 
-    LwsnHeader tmpHeader;
-    p->PeekHeader(tmpHeader);
+	LwsnHeader tempheader;
+	ackpacket->RemoveHeader(tempheader);        
 
-    if(tmpHeader.GetOsid() > m_sid){
-      if(m_sid %3 == 2){
-        Simulator::Schedule(Seconds(2.0-a),&SimpleNetDevice::Forwarding,this,p,l_address);
-      }
-      else if(m_sid%3 == 1){
-        Simulator::Schedule(Seconds(1.0-a),&SimpleNetDevice::Forwarding,this,p,l_address);
+	LwsnHeader ackheader;
+	ackheader.SetOsid(tempheader.GetOsid());
+	ackheader.SetPsid(this->GetSid());
+	ackheader.SetE(0);
+	ackheader.SetR(0);
+  ackheader.SetDid(tempheader.GetDid());
+	ackheader.SetType(LwsnHeader::IACK);
+	ackheader.SetStartTime(tempheader.GetStartTime());
+
+	ackpacket->AddHeader(ackheader);
+
+	Mac48Address from = Mac48Address::ConvertFrom (this->GetAddress());
+
+	ChannelSend(ackpacket,protocol,to,from);
+}
+void
+SimpleNetDevice::WaitSend()
+{
+	if(send_flag == false){
+		if(m_queue->GetNPackets()>0){
+
+		  NS_LOG_UNCOND("Sid"<<this->GetSid()<<" WaitSend Queue Packet #  "<<m_queue -> GetNPackets());
+
+			Ptr<Packet> packet;
+			packet = m_queue->Dequeue()->GetPacket();
+
+		  LwsnHeader tempheader;
+		  packet->RemoveHeader(tempheader);
+
+			LwsnHeader sendheader;
+			sendheader.SetOsid(tempheader.GetOsid());
+			sendheader.SetPsid(this->GetSid());
+			sendheader.SetE(0);
+			sendheader.SetR(0);
+	    sendheader.SetDid(tempheader.GetDid());
+      if(tempheader.GetType()==LwsnHeader::ORIGINAL_TRANSMISSION){
+        if(tempheader.GetOsid()==m_sid){
+          sendheader.SetType(tempheader.GetType());
+        }
+        else{
+          sendheader.SetType(LwsnHeader::FORWARDING);
+        }
       }
       else{
-        Simulator::Schedule(Seconds(4.0-a),&SimpleNetDevice::Forwarding,this,p,l_address);
+        sendheader.SetType(tempheader.GetType());
       }
+			sendheader.SetStartTime(tempheader.GetStartTime());
+
+			packet->AddHeader(sendheader);
+
+			m_txPacket = packet ->Copy();
+
+			if(sendheader.GetType()==LwsnHeader::ORIGINAL_TRANSMISSION){
+				OriginalTransmission(packet,0,true);
+			}
+			else if(sendheader.GetType()==LwsnHeader::FORWARDING){
+				if(sendheader.GetOsid() > this->GetSid()){
+					Forwarding(packet,0,m_laddress);
+					AckSend(packet,0,m_raddress);
+				}
+				else{
+					Forwarding(packet,0,m_raddress);
+					AckSend(packet,0,m_laddress);
+				}
+			}
+		}
+		else {
+			NS_LOG_UNCOND("SID" << m_sid << "  NO WAITING PACKET");
     }
-    else{
-      if(m_sid%3 == 2){
-        Simulator::Schedule(Seconds(2.0-a),&SimpleNetDevice::Forwarding,this,p,r_address);
-      }
-      else if(m_sid%3 == 1){
-        Simulator::Schedule(Seconds(1.0-a),&SimpleNetDevice::Forwarding,this,p,r_address);
-      }
-      else{
-        Simulator::Schedule(Seconds(4.0-a),&SimpleNetDevice::Forwarding,this,p,r_address);
-      }
-    }
-  }
-}
+	}
+} 
 
 void
-SimpleNetDevice::Forwarding(Ptr<Packet> p,Mac48Address to){
-
-  Ptr<Packet> packet = p->Copy();
-
-  LwsnHeader tempHeader;
-  packet->RemoveHeader(tempHeader);
-
-  m_rxArray[tempHeader.GetOsid()-1] = 2;
-
-  Ptr<Packet> ackpacket = packet->Copy();
-
-  NS_LOG_FUNCTION("");
-  NS_LOG_FUNCTION ("SID  : " <<m_sid << "to : "<<to);
-  NS_LOG_FUNCTION("GetStartTime"<<tempHeader.GetStartTime());
-  NS_LOG_FUNCTION("");
-
-  LwsnHeader sendHeader;
-  sendHeader.SetType(LwsnHeader::FORWARDING);
-  sendHeader.SetPsid(m_sid);
-  sendHeader.SetOsid(tempHeader.GetOsid());
-  sendHeader.SetDid(tempHeader.GetDid());
-  sendHeader.SetStartTime(tempHeader.GetStartTime());
-  sendHeader.SetE(0);
-
-  LwsnHeader ackHeader;
-  ackHeader.SetType(LwsnHeader::IACK);
-  ackHeader.SetPsid(m_sid);
-  ackHeader.SetOsid(tempHeader.GetOsid());
-  ackHeader.SetDid(tempHeader.GetDid());
-  ackHeader.SetStartTime(tempHeader.GetStartTime());
-  ackHeader.SetE(0);
-
-  packet->AddHeader(sendHeader);
-  ackpacket->AddHeader(ackHeader);
-
-
-
-  ChannelSend(packet,0,to,m_address);
-  if(to == l_address){
-    ChannelSend(ackpacket,0,r_address,m_address);
-  }
-  else{
-    ChannelSend(ackpacket,0,l_address,m_address);
-  }
-}
-
-void 
-SimpleNetDevice::SendSchedule(Ptr<Packet> p,Mac48Address from)
-{
-  int temp = 0,x = 100,y =100 ;
-  for(int i =0; i<n_node; i++){
-    if(m_rxArray[i]==1) {
-      temp++;
-      if(temp == 1){
-        x = i;
-      }
-      else if(temp == 2){
-        y = i;
-      }
-    }
-  }
-
-  if(m_sid%3 == 2){
-    if(from == l_address){
-      receive_flag = true;
-      Simulator::Schedule(Seconds(2.1),&SimpleNetDevice::SendCheck,this,p,temp,false,x,y);
-    }else{
-      Simulator::ScheduleNow(&SimpleNetDevice::SendCheck,this,p,temp,true,x,y);
-      receive_flag_1 = true;
-    }
-  }
-  else if(m_sid%3 == 1){
-    if(from == l_address){
-      Simulator::ScheduleNow(&SimpleNetDevice::SendCheck,this,p,temp,true,x,y);
-      receive_flag_1 = true;
-    }else{
-      receive_flag = true;
-      Simulator::Schedule(Seconds(1.1),&SimpleNetDevice::SendCheck,this,p,temp,false,x,y);
-    }
-  }
-  else{
-    if(from == l_address){
-      Simulator::ScheduleNow(&SimpleNetDevice::SendCheck,this,p,temp,true,x,y);
-      receive_flag_1 = true;
-    }else{
-      receive_flag = true;
-      Simulator::Schedule(Seconds(1.1),&SimpleNetDevice::SendCheck,this,p,temp,false,x,y);
-    }
-  }
-
-}
-
-void
-SimpleNetDevice::EndSchedule(){
-  NS_LOG_FUNCTION("Sid : "<<m_sid);
-  if(sch_flag == true){
-    sch_flag = false;
-  }
-  else{
-    send_flag = false;
-  }
-  for(int i =0;i<n_node; i++){
-    m_rxArray[i]=0;
-    m_rxArrayPacket[i]=0;
-  }
-
-  receive_flag = receive_flag_1 = false;
-  end_flag = false;
-
-}
-
-void
-SimpleNetDevice::SetSleep(){
-  if(m_queue->GetNPackets()>0)
-    Ptr<Packet> packet = m_queue->Dequeue()->GetPacket ();
-}
-void 
-SimpleNetDevice::ChannelSend(Ptr<Packet> p, uint16_t protocol, Mac48Address to, Mac48Address from){\
-  n_count++;
-  NS_LOG_FUNCTION ("Sid"<<this->GetSid() <<"n_count" <<n_count );
-  m_channel->Send(p, protocol, to, from, this);
-  Simulator::Schedule(Seconds(1.0),&SimpleNetDevice::SetSleep,this);
-
-/*  if(!end_flag){
-    int slot=0;
-    if(Simulator::Now().GetSeconds()==0){
-      slot=0;
-    }
-    else{
-      int temp = Simulator::Now().GetSeconds();
-      slot=temp%timeslot;
-    }     
-    Simulator::Schedule(Seconds(timeslot-slot),&SimpleNetDevice::EndSchedule,this);
-    end_flag = true;
-  }*/
-  if(!end_flag){
-    int temp = 0;
-    temp = Simulator::Now().GetSeconds()/timeslot;
-    NS_LOG_FUNCTION("now time"<<Simulator::Now().GetSeconds()<<"timeslot " << timeslot);
-    NS_LOG_FUNCTION("temp"<<temp);
-    Simulator::Schedule(Seconds(timeslot-(Simulator::Now().GetSeconds()-temp*timeslot)-0.1),&SimpleNetDevice::EndSchedule,this);
-    NS_LOG_FUNCTION("Sid " <<m_sid << "delay "<<timeslot-(Simulator::Now().GetSeconds()-temp*timeslot));
-            
-    end_flag = true;
-    }
-}
-
-void
-SimpleNetDevice::Print(){
-
-  NS_LOG_UNCOND("====================");
+SimpleNetDevice::QueueCheck(Ptr<Packet> p){
+  NS_LOG_FUNCTION("Sid =>"<<m_sid);
+  Ptr<Packet> receivepacket = p -> Copy();
+  LwsnHeader receiveheader;
 
   if(m_sid == 0){
-    int j = m_queue->GetNPackets();
-    for(int i=0;i<j;i++){
-      Ptr<Packet> packet = m_queue->Dequeue()->GetPacket();
-      LwsnHeader temp;
-      packet->RemoveHeader(temp);
+    p->RemoveHeader(receiveheader);
+    int time = Simulator::Now().GetSeconds();
+    receiveheader.SetStartTime2(time-receiveheader.GetStartTime()+1);
+    NS_LOG_UNCOND("time : "<<time);
+    NS_LOG_UNCOND("starttime2 : " <<receiveheader.GetStartTime2());
 
-      NS_LOG_UNCOND(i+1 << " :: packet Osid : "<<temp.GetOsid()<<" Did : "<<temp.GetDid()<<" Start Time: "<<temp.GetStartTime()<<"  Total Time : " <<temp.GetStartTime2());
+    p -> AddHeader(receiveheader);
+    Ptr<Packet> receivepacket = p -> Copy();
+
+  }
+  receivepacket -> PeekHeader(receiveheader);
+  int t=0;
+  int n=0;
+    if(m_queue->GetNPackets () > 0){
+      while(m_queue->GetNPackets() > 0){
+
+        Ptr<Packet> queue_packet = m_queue->Dequeue()->GetPacket ();
+        LwsnHeader tempheader;
+        queue_packet->PeekHeader(tempheader);
+
+        if(tempheader.GetDid()==receiveheader.GetDid() && tempheader.GetOsid()==receiveheader.GetOsid()){
+          n = 1;
+          temp_queue->Enqueue(Create<QueueItem> (queue_packet));
+          NS_LOG_UNCOND("------------same packet -----Sid -> "<< receiveheader.GetOsid()<<"-----");
+          break;       
+        }
+          else{          
+          temp_queue->Enqueue(Create<QueueItem> (queue_packet));
+        }
+      }
+      if(n != 1){
+        m_queue -> Enqueue(Create<QueueItem> (p));
+      }
+
+      if(m_queue->GetNPackets()==0){
+        t = temp_queue ->GetNPackets();
+        for(int i =0; i < t; i++){        
+
+          Ptr<Packet> temp = temp_queue->Dequeue()->GetPacket ();
+
+          m_queue->Enqueue(Create<QueueItem> (temp));
+
+        }
+      }else{
+        t = m_queue->GetNPackets();
+        for(int i = 0; i < t;i++){                  
+          Ptr<Packet> temp = m_queue->Dequeue()->GetPacket ();
+
+          temp_queue->Enqueue(Create<QueueItem> (temp));
+        }
+        t = temp_queue->GetNPackets();
+        for(int i = 0; i < t; i++){
+
+          Ptr<Packet> temp1 = temp_queue->Dequeue()->GetPacket ();
+
+          m_queue->Enqueue(Create<QueueItem> (temp1));
+        }
+      }
+    }else{
+      m_queue->Enqueue(Create<QueueItem>(p));
+    }
+}
+
+int 
+SimpleNetDevice::RandTime()
+{
+  
+	if(k>round)
+	{
+		k = 1;
+		return 100;
+	}
+	/*else if (k==0)
+	{
+		if(rand()%2 == 0)
+		{	
+			k++;
+			NS_LOG_UNCOND("Sid : "<<m_sid<<" rand time -> 0");
+			return 0;
+		}
+		else
+		{	
+			k++;
+			NS_LOG_UNCOND("Sid : "<<m_sid<<"rand time -> 1");
+			return 1;
+		}
+    // maxTime = 1;
+
+    // r->SetAttribute ("Min", DoubleValue (minTime));
+    // r->SetAttribute ("Max", DoubleValue (maxTime));
+    // int x = r->GetInteger();
+    // NS_LOG_UNCOND("Sid : " << m_sid <<"rand time -> " << x );
+    // return x;
+
+	}*/
+	else
+	{
+    Ptr<UniformRandomVariable> r = CreateObject<UniformRandomVariable> ();
+    maxTime = pow(2,k++)-1;
+    r->SetAttribute ("Min", DoubleValue (minTime));
+    r->SetAttribute ("Max", DoubleValue (maxTime));
+    int x = r->GetInteger();
+    // int x = (int)(rand()%(int)(pow(2,k)-1));
+		NS_LOG_UNCOND("Sid : " << m_sid <<"rand time -> " << x );
+		return x;
+	}
+
+
+}
+void
+SimpleNetDevice::AckCheck(Ptr<Packet> p, uint16_t protocol, Mac48Address to, Mac48Address from){
+
+	if (to == m_raddress){
+	    if(rack_flag){
+				NS_LOG_FUNCTION("Sid -> " << this->GetSid() <<"AckReceive Success to " << to);
+	    	rack_flag = false;
+	      k = 1;
+	      wait_ack = false;
+        m_txPacket=0;
+        WaitSend();
+
+	    }
+	    else{
+	        //retransmission
+	        //random time
+          LwsnHeader temp;
+          p->PeekHeader(temp);
+	        uint16_t delay = RandTime();
+	        if(delay == 100) {
+	        	NS_LOG_FUNCTION("---------------------------");
+	        	NS_LOG_FUNCTION("Sid -> " << this->GetSid()<< "Send Fail to" << to << "  Osid :" << temp.GetOsid());
+	        	NS_LOG_FUNCTION("---------------------------");
+	        	k = 1;
+	        	wait_ack = false;
+            m_txPacket=0;
+            rack_flag = false;
+            WaitSend();
+	        }
+	        else{
+            NS_LOG_FUNCTION("Sid->" <<m_sid << "Did -> "<<temp.GetDid());
+	        	Simulator::Schedule(Seconds(delay),&SimpleNetDevice::ReSend,this,p,protocol,to,from);
+	    	}
+	    }
+	}
+	else if (to == m_laddress){
+		if(lack_flag){
+			NS_LOG_FUNCTION("Sid -> " << this->GetSid() <<"AckReceive Success to " << to);
+			lack_flag = false;
+			k = 1;
+	    wait_ack = false;
+	    m_txPacket=0;
+	    WaitSend();
+	  }
+	    else{
+	        //retransmission
+	        //random time
+	        uint16_t delay = RandTime();
+          LwsnHeader temp;
+          p->PeekHeader(temp);
+	        if(delay == 100) {
+	        	NS_LOG_FUNCTION("---------------------------");	        	
+	        	NS_LOG_FUNCTION("Sid -> " << this->GetSid()<< "Send Fail to" << to<< "  Osid :" << temp.GetOsid());
+	        	NS_LOG_FUNCTION("---------------------------");
+	        	k = 1;
+	        	wait_ack = false;
+            m_txPacket=0;
+				    lack_flag = false;
+            WaitSend();		
+	        }
+	        else{
+        		LwsnHeader temp;
+            p->PeekHeader(temp);
+            NS_LOG_FUNCTION("Sid->" <<m_sid << "Did -> "<<temp.GetDid());
+	        	Simulator::Schedule(Seconds(delay),&SimpleNetDevice::ReSend,this,p,protocol,to,from);
+	        }
+	    }
+	}
+}
+
+void
+SimpleNetDevice::OriginalAckCheck(Ptr<Packet> p, uint16_t protocol){
+
+  NS_LOG_FUNCTION("sid -> " << m_sid);
+	if((rack_flag==false)&&(lack_flag==false)){
+		uint16_t delay = RandTime();
+	    if(delay == 100) {
+	        NS_LOG_FUNCTION("---------------------------");
+	     	NS_LOG_FUNCTION("Sid -> " << this->GetSid()<< "Send Fail to" << m_raddress <<", "<<m_laddress);
+	        NS_LOG_FUNCTION("---------------------------");
+	     	k = 1;
+	     	wait_ack = false;
+            m_txPacket=0;
+            WaitSend();
+            rack_flag = false;
+            lack_flag = false;
+	    }
+	    else{
+	    	Simulator::Schedule(Seconds(delay),&SimpleNetDevice::ReOriginalSend,this,p,0);
+	    }
+	}
+	else if((rack_flag)&&(lack_flag)){
+		 NS_LOG_FUNCTION("Sid -> " << this->GetSid() <<"AckReceive Success to " << m_raddress);
+		 NS_LOG_FUNCTION("Sid -> " << this->GetSid() <<"AckReceive Success to " << m_laddress);
+		 rack_flag = false;	lack_flag = false;
+	     wait_ack = false;
+	     k = 1;
+         m_txPacket=0;
+         WaitSend();
+	}
+	else{
+    LwsnHeader temp;
+    p->PeekHeader(temp);
+		if(!rack_flag){
+			//retransmission
+		    //random time
+		    uint16_t delay = RandTime();
+		    if(delay == 100) {
+	        	NS_LOG_FUNCTION("---------------------------");
+		     	  NS_LOG_FUNCTION("Sid -> " << this->GetSid()<< "Send Fail to" << m_raddress<< "  Osid :" << temp.GetOsid());
+	        	NS_LOG_FUNCTION("---------------------------");
+	        	wait_ack = false;	
+	         	k = 1;
+	         	m_txPacket=0;
+	         	WaitSend();
+		   	}
+        else{
+		   	  Simulator::Schedule(Seconds(delay),&SimpleNetDevice::ReSend,this,p,protocol,m_raddress,m_address);
+        }
+		}
+		else if(!lack_flag){
+		    //retransmission
+		    //random time
+		    uint16_t delay = RandTime();
+	        if(delay == 100) {
+	        	NS_LOG_FUNCTION("---------------------------");
+	        	NS_LOG_FUNCTION("Sid -> " << this->GetSid()<< "Send Fail to" << m_laddress<< "  Osid :" << temp.GetOsid());
+	        	NS_LOG_FUNCTION("---------------------------");
+	        	wait_ack = false;
+	        	k = 1;
+	         	m_txPacket=0;
+	         	WaitSend();
+	        }
+	        else{
+	        	Simulator::Schedule(Seconds(delay),&SimpleNetDevice::ReSend,this,p,protocol,m_laddress,m_address);
+	        }
+		    
+		}
+	}
+	
+	
+}
+
+void
+SimpleNetDevice::OriginalWaitAck(Ptr<Packet> p, uint16_t protocol, Mac48Address from){
+
+	wait_ack = true;
+
+	if(last_node){
+		if(m_sid == 1){
+			lack_flag = true;
+			rack_flag = false;
+		}
+		else{
+			rack_flag = true;
+			lack_flag = false;
+		}
+	}
+	else{
+		lack_flag = false;
+		rack_flag = false;
+	}
+	Simulator::Schedule(Seconds(3.0),&SimpleNetDevice::OriginalAckCheck,this,p,protocol);
+}
+
+void
+SimpleNetDevice::WaitAck(Ptr<Packet> p, uint16_t protocol, Mac48Address to, Mac48Address from)
+{
+  NS_LOG_FUNCTION("Sid ->"<<m_sid);
+	lack_flag = false;
+	rack_flag = false;
+	if(!last_node){
+		wait_ack = true;
+		Simulator::Schedule(Seconds(2.0),&SimpleNetDevice::AckCheck,this,p,protocol,to,from);
+	}	
+  else{
+     if(m_sid == 1){
+       if(to == m_raddress){
+        wait_ack = true;
+        Simulator::Schedule(Seconds(2.0),&SimpleNetDevice::AckCheck,this,p,protocol,to,from);
+       }
+       else{
+        NS_LOG_FUNCTION("Sid : "<<m_sid<<"Wait Send");
+        m_txPacket=0;
+        Simulator::Schedule(Seconds(2.0),&SimpleNetDevice::WaitSend,this);
+       }
 
     }
+     else{
+      if(to==m_laddress){
+        wait_ack = true;
+        Simulator::Schedule(Seconds(2.0),&SimpleNetDevice::AckCheck,this,p,protocol,to,from);
+      }
+      else{
+        NS_LOG_FUNCTION("Sid : "<<m_sid<<"Wait Send");
+        m_txPacket=0;
+        Simulator::Schedule(Seconds(2.0),&SimpleNetDevice::WaitSend,this);
+
+      }
+     }
   }
-  NS_LOG_UNCOND("Sid -> " << m_sid << "send : " << n_count/2-n_ncCount <<"  networkcoding : " << n_ncCount);
-  NS_LOG_UNCOND("====================");
+	
+}
+void
+SimpleNetDevice::ReSend(Ptr<Packet> p, uint16_t protocol, Mac48Address to, Mac48Address from)
+{
+
+  if(to == m_raddress){
+    if(rack_flag){
+      k = 1;
+      wait_ack = false;
+      m_txPacket=0;
+      rack_flag = false;
+      WaitSend();
+      return ;
+    }
+  }
+  else{
+    if(lack_flag){
+      k = 1;
+      wait_ack = false;
+      m_txPacket=0;
+      lack_flag = false;
+      WaitSend();
+      return;
+    }
+  }
+
+	send_flag = true;
+  m_retrans_count++;
+
+
+	NS_LOG_FUNCTION ("Sid -> "<<this->GetSid() << "  retransmission to :"<< to);
+
+  Ptr<Packet> repacket = p->Copy();
+  Ptr<Packet> ackpacket = p->Copy();
+
+	LwsnHeader tempheader;
+	repacket->RemoveHeader(tempheader);
+
+  NS_LOG_FUNCTION("Sid->" <<m_sid << "Osid -> "<<tempheader.GetOsid());
+    
+	LwsnHeader retransheader;
+	retransheader.SetOsid(tempheader.GetOsid());
+	retransheader.SetPsid(this->GetSid());
+	retransheader.SetE(0);
+	retransheader.SetR(1);
+  retransheader.SetDid(tempheader.GetDid());
+	retransheader.SetType(LwsnHeader::FORWARDING);
+	retransheader.SetStartTime(tempheader.GetStartTime());
+
+  LwsnHeader ackheader;
+	ackheader.SetOsid(tempheader.GetOsid());
+	ackheader.SetPsid(this->GetSid());
+	ackheader.SetE(0);
+	ackheader.SetR(1);
+  ackheader.SetDid(tempheader.GetDid());
+	ackheader.SetType(LwsnHeader::IACK);
+	ackheader.SetStartTime(tempheader.GetStartTime());
+
+	repacket->AddHeader(retransheader);
+  ackpacket->AddHeader(ackheader);
+
+    if(to == m_laddress){
+      ChannelSend(ackpacket,protocol,m_raddress,from);      
+    }
+    else{
+      ChannelSend(ackpacket,protocol,m_laddress,from); 
+    }
+    ChannelSend(repacket,protocol,to,from); 
+    WaitAck(repacket,0,to,from);
+}
+
+void
+SimpleNetDevice::ReOriginalSend(Ptr<Packet> p, uint16_t protocol){
+  if(lack_flag&&rack_flag){
+    k = 1;
+    wait_ack = false;
+    m_txPacket=0;
+    rack_flag = false;
+    lack_flag = false;
+    WaitSend();
+    return;
+  }
+  else if(lack_flag){
+    lack_flag = false;
+    ReSend(p,protocol,m_raddress,m_address);
+    return;
+  }
+  else if(rack_flag){
+    rack_flag = false;
+    ReSend(p,protocol,m_laddress,m_address);
+    return;
+  }
+
+	send_flag = true;
+  m_retrans_count++;
+	
+	NS_LOG_FUNCTION ("Sid -> "<<this->GetSid() << "  retransmission OriginalTransmission ");    
+
+	Ptr<Packet> repacket = p->Copy();
+	LwsnHeader tempheader;
+	repacket->RemoveHeader(tempheader);
+
+	LwsnHeader retransheader;
+	retransheader.SetOsid(tempheader.GetOsid());
+	retransheader.SetPsid(this->GetSid());
+	retransheader.SetE(0);
+	retransheader.SetR(1);
+  retransheader.SetDid(tempheader.GetDid());
+	retransheader.SetType(LwsnHeader::ORIGINAL_TRANSMISSION);
+	retransheader.SetStartTime(tempheader.GetStartTime()); 
+
+	repacket->AddHeader(retransheader);
+
+	Mac48Address r_to = Mac48Address::ConvertFrom (m_raddress);
+	Mac48Address from = Mac48Address::ConvertFrom (m_address);
+	Mac48Address l_to = Mac48Address::ConvertFrom (m_laddress);
+
+  ChannelSend(repacket,protocol,r_to,from);
+  ChannelSend(repacket,protocol,l_to,from);
+
+	OriginalWaitAck(repacket,0,from);
+}
+
+void
+SimpleNetDevice::SetSleep()
+{
+  if(m_queue -> GetNPackets() >0)
+  	NS_LOG_UNCOND("Sid ->"<<this->GetSid()<<"ONE MORE PACKET IS WAITING");
+  send_flag = false;
+}
+
+bool
+SimpleNetDevice::OriginalTransmission(Ptr<Packet> p, uint16_t protocolNumber,bool header){
+
+
+	  Ptr<Packet> packet = p->Copy ();
+
+	  Mac48Address r_to = Mac48Address::ConvertFrom (m_raddress);
+	  Mac48Address l_to = Mac48Address::ConvertFrom (m_laddress);
+	  Mac48Address from = Mac48Address::ConvertFrom (m_address);
+
+	  int time = Simulator::Now().GetSeconds();
+
+	  LwsnHeader sendheader;
+    if(!header){   
+      sendheader.SetOsid(m_sid);
+      sendheader.SetPsid(m_sid);
+      sendheader.SetR(0);
+      sendheader.SetType(LwsnHeader::ORIGINAL_TRANSMISSION);
+      sendheader.SetStartTime(time);
+      sendheader.SetDid(ndid++);
+    }
+    else{   
+      LwsnHeader header;
+      p -> RemoveHeader(header);
+
+      sendheader.SetOsid(m_sid);
+      sendheader.SetPsid(m_sid);
+      sendheader.SetR(0);
+      sendheader.SetType(LwsnHeader::ORIGINAL_TRANSMISSION);
+      sendheader.SetStartTime(header.GetStartTime());
+      sendheader.SetDid(header.GetDid());
+    }
+	  packet->AddHeader(sendheader);
+
+	  NS_LOG_UNCOND("Sid"<<this->GetSid()<<" OriginalTransmission Queue Packet #  "<<m_queue -> GetNPackets());
+
+	  if( send_flag == true || wait_ack ){
+
+	  	m_queue->Enqueue (Create<QueueItem> (packet));
+
+	  	NS_LOG_UNCOND("Sid"<<this->GetSid()<<"  SendFrom Function m_queue packet # 1 more");
+	  	
+	  	return 0;
+	  }
+
+	  if (m_queue->Enqueue (Create<QueueItem> (packet)))
+	    {
+	       send_flag = true;
+	       p = m_queue->Dequeue()->GetPacket ();
+
+	       Time txTime = Time (0);
+	       if (m_bps > DataRate (0))
+	       {
+	         txTime = m_bps.CalculateBytesTxTime (packet->GetSize ());
+	       }
+	       m_txPacket = p -> Copy();
+         txarray[0] = m_sid;
+         txarray[1] = ndid-1;
+         ChannelSend(p,protocolNumber,r_to,from);
+         ChannelSend(p,protocolNumber,l_to,from);
+
+         OriginalWaitAck(p,0,from);
+	        
+	      return true;
+	    }
+
+	  return true;	
+
+}
+
+void
+SimpleNetDevice::Forwarding(Ptr<Packet> p,uint16_t protocol, Mac48Address to)
+{
+	send_flag = true;
+
+  Ptr<Packet> packet = p->Copy();
+  LwsnHeader receiveheader;
+  packet->RemoveHeader(receiveheader);       
+
+  if(txarray[0] == receiveheader.GetOsid()){
+    if(txarray[1] == receiveheader.GetDid()){
+      m_retrans_count++;
+      AckSend(p,0,to);
+      return;
+    }
+  }
+  NS_LOG_FUNCTION("Sid->" <<m_sid << "Osid -> "<<receiveheader.GetOsid());
+	LwsnHeader forwardingheader;
+	forwardingheader.SetOsid(receiveheader.GetOsid());
+	forwardingheader.SetPsid(this->GetSid());
+	forwardingheader.SetE(0);
+	forwardingheader.SetR(0);        
+  forwardingheader.SetDid(receiveheader.GetDid());
+	forwardingheader.SetType(LwsnHeader::FORWARDING);
+	forwardingheader.SetStartTime(receiveheader.GetStartTime());
+
+
+
+  txarray[0] = forwardingheader.GetOsid();
+  txarray[1] = forwardingheader.GetDid();
+
+	packet->AddHeader(forwardingheader);
+
+	Mac48Address from = Mac48Address::ConvertFrom (this->GetAddress());
+
+	m_txPacket = packet -> Copy();
+
+  ChannelSend(packet,protocol,to,from);        
+
+	WaitAck(packet,protocol,to,from);
+
+}
+
+void
+SimpleNetDevice::ChannelSend(Ptr<Packet> p, uint16_t protocol, Mac48Address to, Mac48Address from)
+{
+	NS_LOG_FUNCTION ("Sid ->"<<this->GetSid() <<"ChannelSend to  " << to << "m_count : "<<m_count<<"  m_retrans_count"<<m_retrans_count);
+  m_count++;
+	m_channel -> Send(p,protocol,to,from,this);
+	Simulator::Schedule(Seconds(1.0),&SimpleNetDevice::SetSleep,this);
+}
+
+void
+SimpleNetDevice::Print()
+{
+  if(m_sid == 0){
+    NS_LOG_UNCOND("============================");
+    NS_LOG_UNCOND("GateWay : "<<m_gid<<"receive packet : " << m_queue->GetNPackets());
+    int j = m_queue->GetNPackets();
+    for(int i =0; i<j;i++){
+      LwsnHeader temp;
+      Ptr<Packet> p = m_queue->Dequeue()->GetPacket();
+
+      p->RemoveHeader(temp);
+      NS_LOG_UNCOND(i+1 << " :: packet Osid : "<<temp.GetOsid()<<" Did : "<<temp.GetDid()<<" Start Time: "<<temp.GetStartTime()<<"  Total Time : " <<temp.GetStartTime2());
+    }
+    NS_LOG_UNCOND("============================");
+  }
+  else{
+    NS_LOG_UNCOND("============================");
+    NS_LOG_UNCOND("Sid : "<<m_sid<<"Send Count : " << m_count/2 << "  RESend Count : "<<m_retrans_count);
+    NS_LOG_UNCOND("============================");
+  }
 }
 
 bool 
 SimpleNetDevice::Send (Ptr<Packet> packet, const Address& dest, uint16_t protocolNumber)
 {
   //NS_LOG_FUNCTION (this << packet << dest << protocolNumber);
-  //std::cout<<"send"<<std::endl;
+
   return SendFrom (packet, m_address, dest, protocolNumber);
 }
+
 bool
-SimpleNetDevice::SendFrom(Ptr<Packet> p, const Address& source, const Address& dest, uint16_t protocolNumber)
+SimpleNetDevice::SendFrom (Ptr<Packet> p, const Address& source, const Address& dest, uint16_t protocolNumber)
 {
-  if(p->GetSize()>GetMtu())
-  {
-    return false;
-  }
-  Ptr<Packet> packet = p->Copy();
-
-  Mac48Address to = Mac48Address::ConvertFrom(dest);
-  Mac48Address from = Mac48Address::ConvertFrom(source);
-
-  SimpleTag tag;
-  tag.SetSrc(from);
-  tag.SetDst(to);
-  tag.SetProto(protocolNumber);
-
-  p->AddPacketTag(tag);
-
-  if(m_queue->Enqueue(Create<QueueItem> (p)))
-  {
-    if(m_queue->GetNPackets()==1 && !TransmitCompleteEvent.IsRunning())
-    {
-      p = m_queue->Dequeue()->GetPacket ();
-      p->RemovePacketTag(tag);
-      Time txTime = Time(0);
-      if(m_bps > DataRate(0))
-      {
-        txTime = m_bps.CalculateBytesTxTime(packet->GetSize());
-      }
-      m_channel -> Send(p,protocolNumber,to,from,this);
-      TransmitCompleteEvent = Simulator::Schedule(txTime,&SimpleNetDevice::TransmitComplete,this);
-    }
-    return true;
-  }
-  m_channel->Send(packet,protocolNumber,to,from,this);
-  return true;
-}
-bool
-SimpleNetDevice::OriginalTransmission (Ptr<Packet> p,bool header)
-{ 
-  //std::cout<<this->GetSid()<<"sendFrom"<<std::endl;	
-  NS_LOG_FUNCTION ("Sid" << m_sid );  
+  //NS_LOG_FUNCTION (this << p << source << dest << protocolNumber);
   if (p->GetSize () > GetMtu ())
     {
       return false;
     }
   Ptr<Packet> packet = p->Copy ();
 
-  Mac48Address rto = Mac48Address::ConvertFrom (r_address);
-  Mac48Address lto = Mac48Address::ConvertFrom (l_address);
-  Mac48Address from = Mac48Address::ConvertFrom (m_address);
+  Mac48Address to = Mac48Address::ConvertFrom (dest);
+  Mac48Address from = Mac48Address::ConvertFrom (source);
 
-  int protocolNumber = 0;
-  int time = Simulator::Now().GetSeconds();
-  LwsnHeader sendheader;
-  if(!header){
-    sendheader.SetOsid(m_sid);
-    sendheader.SetPsid(m_sid);
-    sendheader.SetType(LwsnHeader::ORIGINAL_TRANSMISSION);
-    sendheader.SetDid(++ndid);
-    sendheader.SetE(0);
-    sendheader.SetStartTime(Simulator::Now().GetSeconds());
-  }
-  else
-  {
-    LwsnHeader header;
-    packet->RemoveHeader(header);
-    NS_LOG_FUNCTION("GetStartTime"<<header.GetStartTime());
+  SimpleTag tag;
+  tag.SetSrc (from);
+  tag.SetDst (to);
+  tag.SetProto (protocolNumber);
 
-    sendheader.SetOsid(m_sid);
-    sendheader.SetPsid(m_sid);
-    sendheader.SetE(0);
-    sendheader.SetType(LwsnHeader::ORIGINAL_TRANSMISSION);
-    sendheader.SetStartTime(header.GetStartTime());
-    sendheader.SetDid(header.GetDid());
-  }
-  packet->AddHeader(sendheader);
-
-  if(send_flag == true){
-
-    int delay = time%timeslot;
-    NS_LOG_UNCOND("Sid : "<<m_sid<<"delay" << timeslot-delay);
-    Simulator::Schedule(Seconds(timeslot-delay), &SimpleNetDevice::OriginalTransmission, this,packet,true);
-      
-    return 0;
+  p->AddPacketTag (tag);
+  if(m_queue -> GetNPackets() > 0){
+  	m_queue->Enqueue (Create<QueueItem> (p));
+  	//
+/*  	if(ack_flag == true){
+  		Simulator::ScheduleNow(&SimpleNetDevice::WaitSend,this,p,source,dest,protocolNumber);
+  	}
+  	else{
+  		Simulator::ScheduleNow(&SimpleNetDevice::WaitAck,this,p,source,dest,protocolNumber);
+  	}*/
+  	NS_LOG_UNCOND("Sid"<<this->GetSid()<<"  SendFrom Function m_queue packet # 1 more");
+  	
+  	return 0;
   }
 
-  if (m_queue->Enqueue (Create<QueueItem> (packet)))
+  if (m_queue->Enqueue (Create<QueueItem> (p)))
     {
       if (m_queue->GetNPackets () == 1 && !TransmitCompleteEvent.IsRunning ())
         {
-          send_flag = true;
-
           p = m_queue->Dequeue ()->GetPacket ();
-
-          int delay=Simulator::Now().GetSeconds();
-          int slot=0;
-
+          p->RemovePacketTag (tag);
           Time txTime = Time (0);
           if (m_bps > DataRate (0))
             {
               txTime = m_bps.CalculateBytesTxTime (packet->GetSize ());
             }
-            /*schedule*/
-        
-    	  if(delay==0){
-    	  	slot=0;
-    	  }
-    	  else{
-    	  	slot=delay%timeslot;
-    	  }
-        
-    	  if(m_sid%3 == 1){
-    	  		if(slot==0){
-              ChannelSend(p,protocolNumber,rto,from);
-              ChannelSend(p,protocolNumber,lto,from);
-    	  		}
-    	  		else {
-    	  			delay=timeslot-slot;
-              sch_flag = true;
-              Simulator::Schedule(Seconds(delay),&SimpleNetDevice::ChannelSend,this,p,protocolNumber,rto,from);
-    	  			Simulator::Schedule(Seconds(delay),&SimpleNetDevice::ChannelSend,this,p,protocolNumber,lto,from);
-              Simulator::Schedule(Seconds(delay),&SimpleNetDevice::SetArray,this,m_sid,p);
-              return true;
-    	  		}
-    	  }
-    	  else if(m_sid%3 == 2){
-    	  		if(slot==1){
-              ChannelSend(p,protocolNumber,rto,from);
-              ChannelSend(p,protocolNumber,lto,from);
-    	  		}
-            else if(slot==0){
-              Simulator::Schedule(Seconds(1.0),&SimpleNetDevice::ChannelSend,this,p,protocolNumber,rto,from);
-              Simulator::Schedule(Seconds(1.0),&SimpleNetDevice::ChannelSend,this,p,protocolNumber,lto,from);
-            }
-    	  		else{
-              sch_flag = true;
-    	  			delay=timeslot-slot+1;
-              Simulator::Schedule(Seconds(delay),&SimpleNetDevice::ChannelSend,this,p,protocolNumber,rto,from);
-    	  			Simulator::Schedule(Seconds(delay),&SimpleNetDevice::ChannelSend,this,p,protocolNumber,lto,from);
-              Simulator::Schedule(Seconds(delay),&SimpleNetDevice::SetArray,this,m_sid,p);
-              return true;
-    	  		}
-    	  }
-    	  else {
-    	  		if(slot==2){
-              ChannelSend(p,protocolNumber,rto,from);
-              ChannelSend(p,protocolNumber,lto,from);
-    	  		}
-            else if(slot==0){
-              Simulator::Schedule(Seconds(2.0),&SimpleNetDevice::ChannelSend,this,p,protocolNumber,rto,from);
-              Simulator::Schedule(Seconds(2.0),&SimpleNetDevice::ChannelSend,this,p,protocolNumber,lto,from);
-            }
-            else if(slot==1){
-              Simulator::Schedule(Seconds(1.0),&SimpleNetDevice::ChannelSend,this,p,protocolNumber,rto,from);
-              Simulator::Schedule(Seconds(1.0),&SimpleNetDevice::ChannelSend,this,p,protocolNumber,lto,from);
-            }
-    	  		else{
-              sch_flag = true;
-    	  			delay=timeslot-slot+2;
-              Simulator::Schedule(Seconds(delay),&SimpleNetDevice::ChannelSend,this,p,protocolNumber,rto,from);
-    	  			Simulator::Schedule(Seconds(delay),&SimpleNetDevice::ChannelSend,this,p,protocolNumber,lto,from);
-              Simulator::Schedule(Seconds(delay),&SimpleNetDevice::SetArray,this,m_sid,p);
+          //m_channel->Send (p, protocolNumber, to, from, this);
+          //TransmitCompleteEvent = Simulator::Schedule (txTime, &SimpleNetDevice::TransmitComplete, this);
+          m_txPacket = p -> Copy();
+          Simulator::ScheduleNow(&SimpleNetDevice::ChannelSend,this,p,protocolNumber,to,from);
+          Simulator::Schedule(Seconds(1.0),&SimpleNetDevice::WaitAck,this,p,protocolNumber,to,from);
 
-              return true;
-    	  		}
-    	  }
-
-        m_rxArray[m_sid-1] = 2;
-        m_rxArrayPacket[m_sid-1] = p -> Copy();
-      }
+        }
       return true;
     }
+
+
+  m_channel->Send (packet, protocolNumber, to, from, this);
   return true;
 }
 
-void
-SimpleNetDevice::SetArray(int x,Ptr<Packet> p){
-  m_rxArray[x-1] = 2;
-  m_rxArrayPacket[x-1] = p ->Copy();
-}
 
 void
 SimpleNetDevice::TransmitComplete ()
@@ -1201,3 +1605,4 @@ SimpleNetDevice::SupportsSendFrom (void) const
 }
 
 } // namespace ns3
+

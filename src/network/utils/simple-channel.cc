@@ -73,7 +73,7 @@ SimpleChannel::Send (Ptr<Packet> p, uint16_t protocol,
             }
         }
       Simulator::ScheduleWithContext (tmp->GetNode ()->GetId (), m_delay,
-                                      &SimpleNetDevice::Receive, tmp, p->Copy (), protocol, to, from);
+                                      &SimpleNetDevice::ReceiveStart, tmp, p->Copy (), protocol, to, from);
     }
 }
 

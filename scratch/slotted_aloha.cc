@@ -1,21 +1,30 @@
-#include "ns3/core-module.h"
-#include "ns3/network-module.h"
-#include "ns3/mac48-address.h"
+#include <ns3/network-module.h>
+#include <ns3/core-module.h>
+#include <ns3/mac48-address.h>
+
 #include <cstdlib>
 #include <iostream>
 
 using namespace ns3;
 
-int main (int argc, char *argv[])
-{
-  NS_LOG_UNCOND("Start");
+int main(int argc, char *argv[]){
 
   LogComponentEnableAll(LOG_PREFIX_TIME);
-  LogComponentEnableAll(LOG_PREFIX_FUNC);
+//  LogComponentEnableAll(LOG_PREFIX_FUNC);
   LogComponentEnable("SimpleNetDevice",LOG_LEVEL_ALL);
+//  LogComponentEnable("SimpleChannel",LOG_LEVEL_ALL);
   NodeContainer nodes;
-  nodes.Create (8);
+  nodes.Create(8);
 
+ // std::cout << (int)(rand() % (int)(pow(2,3)-1)) << std::endl;
+  //std::cout << (int)(rand()%2) << std::endl;
+
+  srand(5);
+  //srand(12354);
+  //srand(12355);
+  //srand(12356);
+  //srand(12357);
+  //srand(12358);
   Ptr<SimpleNetDevice> dev1;
   dev1 = CreateObject<SimpleNetDevice> ();
   dev1->SetAddress(Mac48Address("00:00:00:00:00:01"));
@@ -54,8 +63,7 @@ int main (int argc, char *argv[])
   Ptr<SimpleNetDevice> gate2;
   gate2 = CreateObject<SimpleNetDevice> ();
   gate2->SetAddress(Mac48Address("00:00:00:00:00:08"));
-  nodes.Get(7)->AddDevice (gate2);
-
+  nodes.Get(7)->AddDevice (gate2);	
 
   Ptr<SimpleChannel> channel = CreateObject<SimpleChannel> ();
   dev1->SetChannel (channel);
@@ -95,69 +103,64 @@ int main (int argc, char *argv[])
   dev5->SetSideAddress(dev4->GetAddress(),dev6->GetAddress());
   dev6->SetSideAddress(dev5->GetAddress(),gate2->GetAddress());
 
+  dev1->SetLastNode(true);
+  dev6->SetLastNode(true);
+
   Ptr<Packet> p = Create<Packet> (100);
   Ptr<Packet> p1 = Create<Packet> (100);
   Ptr<Packet> p2 = Create<Packet> (100);
   Ptr<Packet> p3 = Create<Packet> (100);
-  Ptr<Packet> p4 = Create<Packet> (100);
-
-  dev1 ->SetN_node(6); 
-  dev2 ->SetN_node(6); 
-  dev3 ->SetN_node(6); 
-  dev4 ->SetN_node(6); 
-  dev5 ->SetN_node(6); 
-  dev6 ->SetN_node(6); 
-
+  
 
   // 1
 
-  // Simulator::Schedule(Seconds(0.0),&SimpleNetDevice::OriginalTransmission,dev1,p,false);
-  // Simulator::Schedule(Seconds(1.0),&SimpleNetDevice::OriginalTransmission,dev5,p1,false);
+  // Simulator::Schedule(Seconds(0.0),&SimpleNetDevice::OriginalTransmission,dev1,p,0,false);
+  // Simulator::Schedule(Seconds(1.0),&SimpleNetDevice::OriginalTransmission,dev5,p1,0,false);
 
   // 2
 
-  // Simulator::Schedule(Seconds(0.0),&SimpleNetDevice::OriginalTransmission,dev2,p,false);
-  // Simulator::Schedule(Seconds(0.0),&SimpleNetDevice::OriginalTransmission,dev3,p1,false);
+  // Simulator::Schedule(Seconds(0.0),&SimpleNetDevice::OriginalTransmission,dev2,p,0,false);
+  // Simulator::Schedule(Seconds(0.0),&SimpleNetDevice::OriginalTransmission,dev3,p1,0,false);
 
   // // 3
 
-  Simulator::Schedule(Seconds(0.0),&SimpleNetDevice::OriginalTransmission,dev1,p,false);
-  Simulator::Schedule(Seconds(1.0),&SimpleNetDevice::OriginalTransmission,dev4,p1,false);
+  // Simulator::Schedule(Seconds(0.0),&SimpleNetDevice::OriginalTransmission,dev1,p,0,false);
+  // Simulator::Schedule(Seconds(1.0),&SimpleNetDevice::OriginalTransmission,dev4,p1,0,false);
 
   // // 4
 
-  // Simulator::Schedule(Seconds(0.0),&SimpleNetDevice::OriginalTransmission,dev1,p,false);
-  // Simulator::Schedule(Seconds(2.0),&SimpleNetDevice::OriginalTransmission,dev3,p1,false);
+  // Simulator::Schedule(Seconds(0.0),&SimpleNetDevice::OriginalTransmission,dev1,p,0,false);
+  // Simulator::Schedule(Seconds(2.0),&SimpleNetDevice::OriginalTransmission,dev3,p1,0,false);
 
   // // 5
-
-  // Simulator::Schedule(Seconds(0.0),&SimpleNetDevice::OriginalTransmission,dev4,p,false);
-  // Simulator::Schedule(Seconds(1.0),&SimpleNetDevice::OriginalTransmission,dev2,p1,false);
+  // Simulator::Schedule(Seconds(0.0),&SimpleNetDevice::OriginalTransmission,dev4,p1,0,false);
+  //  Simulator::Schedule(Seconds(1.0),&SimpleNetDevice::OriginalTransmission,dev2,p,0,false);
 
   // // 6
 
-  // Simulator::Schedule(Seconds(0.0),&SimpleNetDevice::OriginalTransmission,dev4,p1,false);
-  // Simulator::Schedule(Seconds(0.0),&SimpleNetDevice::OriginalTransmission,dev2,p,false);
-  // Simulator::Schedule(Seconds(0.0),&SimpleNetDevice::OriginalTransmission,dev3,p2,false);
+  // Simulator::Schedule(Seconds(0.0),&SimpleNetDevice::OriginalTransmission,dev4,p1,0,false);
+  // Simulator::Schedule(Seconds(0.0),&SimpleNetDevice::OriginalTransmission,dev2,p,0,false);
+  // Simulator::Schedule(Seconds(0.0),&SimpleNetDevice::OriginalTransmission,dev3,p2,0,false);
 
-  // 7
+  // // 7
 
-  // Simulator::Schedule(Seconds(0.0),&SimpleNetDevice::OriginalTransmission,dev4,p1,false);
-  // Simulator::Schedule(Seconds(0.0),&SimpleNetDevice::OriginalTransmission,dev2,p,false);
-  // Simulator::Schedule(Seconds(0.0),&SimpleNetDevice::OriginalTransmission,dev3,p2,false);
-  // Simulator::Schedule(Seconds(0.0),&SimpleNetDevice::OriginalTransmission,dev5,p3,false);
+  // Simulator::Schedule(Seconds(0.0),&SimpleNetDevice::OriginalTransmission,dev4,p1,0,false);
+  // Simulator::Schedule(Seconds(0.0),&SimpleNetDevice::OriginalTransmission,dev2,p,0,false);
+  // Simulator::Schedule(Seconds(0.0),&SimpleNetDevice::OriginalTransmission,dev3,p2,0,false);
+  // Simulator::Schedule(Seconds(0.0),&SimpleNetDevice::OriginalTransmission,dev5,p3,0,false);
 
   // 8
-  // Simulator::Schedule(Seconds(0.0),&SimpleNetDevice::OriginalTransmission,dev4,p1,false);
-  // Simulator::Schedule(Seconds(0.0),&SimpleNetDevice::OriginalTransmission,dev2,p,false);
-  //9
- // Simulator::Schedule(Seconds(0.0),&SimpleNetDevice::OriginalTransmission,dev2,p1,false);
- //  Simulator::Schedule(Seconds(1.0),&SimpleNetDevice::OriginalTransmission,dev2,p,false);
+  // Simulator::Schedule(Seconds(0.0),&SimpleNetDevice::OriginalTransmission,dev2,p1,0,false);
+  //  Simulator::Schedule(Seconds(0.0),&SimpleNetDevice::OriginalTransmission,dev2,p,0,false);
+
+  // // 9
+   // Simulator::Schedule(Seconds(0.0),&SimpleNetDevice::OriginalTransmission,dev2,p1,0,false);
+   // Simulator::Schedule(Seconds(1.0),&SimpleNetDevice::OriginalTransmission,dev2,p,0,false);
+  //10
+  Simulator::Schedule(Seconds(0.0),&SimpleNetDevice::OriginalTransmission,dev2,p1,0,false);
+  Simulator::Schedule(Seconds(2.0),&SimpleNetDevice::OriginalTransmission,dev2,p,0,false);
  
- //  //10
- // Simulator::Schedule(Seconds(0.0),&SimpleNetDevice::OriginalTransmission,dev2,p1,false);
- //  Simulator::Schedule(Seconds(2.0),&SimpleNetDevice::OriginalTransmission,dev2,p,false);
- 
+
   Simulator::Schedule(Seconds(100.0),&SimpleNetDevice::Print,dev1);
   Simulator::Schedule(Seconds(100.0),&SimpleNetDevice::Print,dev2);
   Simulator::Schedule(Seconds(100.0),&SimpleNetDevice::Print,dev3);
@@ -165,9 +168,8 @@ int main (int argc, char *argv[])
   Simulator::Schedule(Seconds(100.0),&SimpleNetDevice::Print,dev5);
   Simulator::Schedule(Seconds(100.0),&SimpleNetDevice::Print,dev6);
 
+  RngSeedManager::SetSeed(10);
   Simulator::Run();
-  Simulator::Destroy ();
-  std::cout << " " <<(dev1->n_count+dev2->n_count+dev3->n_count+dev4->n_count+dev5->n_count+dev6->n_count)/2<<std::endl;
-
-  return 0;
+  Simulator::Destroy();
+  std::cout << " " <<(dev1->m_count+dev2->m_count+dev3->m_count+dev4->m_count+dev5->m_count+dev6->m_count)/2<<std::endl;
 }

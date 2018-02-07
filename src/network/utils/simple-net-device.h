@@ -22,16 +22,14 @@
 
 #include <stdint.h>
 #include <string>
-
 #include "ns3/traced-callback.h"
 #include "ns3/net-device.h"
 #include "ns3/queue.h"
 #include "ns3/data-rate.h"
 #include "ns3/data-rate.h"
 #include "ns3/event-id.h"
-#include "ns3/network-module.h"
-#include "mac48-address.h"
 #include "ns3/lwsn-header.h"
+#include "mac48-address.h"
 
 namespace ns3 {
 
@@ -136,28 +134,41 @@ public:
 
   virtual void SetPromiscReceiveCallback (PromiscReceiveCallback cb);
   virtual bool SupportsSendFrom (void) const;
-
+  
   virtual void SetSid(uint16_t sid);
   virtual uint16_t GetSid();
-  virtual void SetGid(uint16_t gid);
-  virtual uint16_t GetGid();
   virtual void SetSideAddress(Address laddress, Address raddress);
-  virtual void SendSchedule(Ptr<Packet> p,Mac48Address from);
-  virtual void ChannelSend(Ptr<Packet> p, uint16_t protocol,Mac48Address to, Mac48Address from);
+  virtual Mac48Address GetLaddress();
+  virtual Mac48Address GetRaddress();
+  virtual void AckReceive(bool x, Mac48Address from);
+  virtual void AckSend(Ptr <Packet> p, uint16_t protocol, Mac48Address to);
+  virtual void WaitSend();
+  virtual void Forwarding(Ptr<Packet> p,uint16_t protocol,Mac48Address to);
+  virtual int RandTime();
+  virtual void WaitAck(Ptr<Packet> p, uint16_t protocol, Mac48Address to, Mac48Address from);
+  virtual void ReSend(Ptr<Packet> p, uint16_t protocol, Mac48Address to,Mac48Address from);
   virtual void SetSleep();
-  Ptr<Packet> encoding(Ptr<Packet> p1, Ptr<Packet> p2);
-  Ptr<Packet> decoding(Ptr<Packet> p);
-  void NetworkCoding(int x, int y);
-  void SendCheck(Ptr<Packet>p,int n,bool flag,int x, int y);
-  void Forwarding(Ptr<Packet> p,Mac48Address to);
-  bool OriginalTransmission(Ptr<Packet> p,bool header);
-  void EndSchedule();
-  void SetN_node(uint16_t x);
+  virtual void ChannelSend(Ptr<Packet> p, uint16_t protocol, Mac48Address to,Mac48Address from);
+  virtual void AckCheck(Ptr<Packet> p, uint16_t protocol, Mac48Address to, Mac48Address from);
+  virtual void OriginalWaitAck(Ptr<Packet> p, uint16_t protocol, Mac48Address from);
+  virtual bool OriginalTransmission(Ptr<Packet> p, uint16_t protocolNumber,bool header);
+  virtual void OriginalAckCheck(Ptr<Packet> p, uint16_t protocol);
+  virtual void ReOriginalSend(Ptr<Packet> p, uint16_t protocol);  
+  Ptr<Packet> GetTxPacket(void) const;
+  void SetTxPacket(Ptr<Packet> p);
+  void ReceiveStart(Ptr<Packet> packet, uint16_t protocol,Mac48Address to, Mac48Address from);
+  void ReceiveCheck(Ptr<Packet> packet, uint16_t protocol,Mac48Address to, Mac48Address from);
+  void SetRound(int x);
+  void SetLastNode(bool x);
+  void SetGid(int x);
+  int GetGid();
   void Print();
-  int n_count;
-  int n_ncCount;
-  void SetArray(int x,Ptr<Packet> p);
-protected:  
+  void QueueCheck(Ptr<Packet> p); 
+  int m_count;
+  int m_retrans_count;
+  int m_collision;
+  int g_receive;
+protected:
   virtual void DoDispose (void);
 private:
   Ptr<SimpleChannel> m_channel; //!< the channel the device is connected to
@@ -168,20 +179,7 @@ private:
   uint32_t m_ifIndex; //!< Interface index
   Mac48Address m_address; //!< MAC address
   Ptr<ErrorModel> m_receiveErrorModel; //!< Receive error model.
-  uint16_t m_sid;
-  uint16_t m_gid;
-  Mac48Address r_address;
-  Mac48Address l_address;
-  uint16_t timeslot;
-  bool end_flag;
-  uint16_t m_rxArray[100];
-  Ptr<Packet> m_rxArrayPacket[100];
-  bool receive_flag;
-  bool receive_flag_1;
-  int ndid;
-  uint16_t n_node;
-  bool send_flag;
-  bool sch_flag;
+
   /**
    * The trace source fired when the phy layer drops a packet it has received
    * due to the error model being active.  Although SimpleNetDevice doesn't 
@@ -214,6 +212,26 @@ private:
    * List of callbacks to fire if the link changes state (up or down).
    */
   TracedCallback<> m_linkChangeCallbacks;
+  Mac48Address m_raddress;
+  Mac48Address m_laddress;
+  uint16_t m_sid;
+  bool rack_flag;
+  bool lack_flag;
+  bool send_flag;
+  uint16_t round;
+  uint16_t k;
+  Ptr<Packet> m_txPacket;
+  int txarray[2];
+  Ptr<Queue> temp_queue;
+  bool wait_ack;
+  bool receive_flag;
+  bool receive_flag_1;
+  bool last_node;
+  int m_gid;
+  int ndid;
+  bool temp_flag;
+  double minTime;
+  double maxTime;
 };
 
 } // namespace ns3

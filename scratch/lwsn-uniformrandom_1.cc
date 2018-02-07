@@ -32,7 +32,7 @@ int main(void)
     // Node Configuration --begin 
     NodeContainer c;
     uint16_t numGateway=2;
-    uint16_t numSensor=90;
+    uint16_t numSensor=6;
     uint16_t numNode = numGateway + numSensor;
     c.Create(numNode);
     MobilityHelper mobility;
@@ -41,7 +41,8 @@ int main(void)
     Ptr<SimpleNetDevice> dev[numNode];
 
     std::string baseAddress = "00:00:00:00:00:";
- 
+    
+    srand(7);
 
     for(uint16_t i = 0; i < numNode ;i++)
     {
@@ -60,7 +61,6 @@ int main(void)
     		ss << baseAddress << i+1;
     	}
     	dev[i] ->SetAddress(Mac48Address(ss.str().c_str()));
-    	dev[i] ->SetN_node(numSensor);
     	//std::cout << dev[i]->GetAddress() << std::endl;
     }
 
@@ -74,6 +74,9 @@ int main(void)
     
     dev[0]->SetGid(1);			dev[0]->SetSid(0);
     dev[numNode-1]->SetGid(2);  dev[numNode-1]->SetSid(0);
+
+  	dev[1]->SetLastNode(true);
+  	dev[numNode-2]->SetLastNode(true);
 
     // dev[0]->SetLowPositionInfo(0,0,0,Mac48Address("00:00:00:00:00:00"));
     // dev[0]->SetHighPositionInfo(dev[1],dev[numNode-1]->GetGid(),dev[1]->GetSid(),
@@ -93,7 +96,7 @@ int main(void)
     // }
 
 	double min = 1.0;
-	double max = 90.0;
+	double max = 6.0;
     RngSeedManager::SetSeed(10);
     // RngSeedManager::SetRun(7);
     Ptr<UniformRandomVariable> x = CreateObject<UniformRandomVariable> ();
@@ -108,9 +111,9 @@ int main(void)
 	t->SetAttribute ("Min", DoubleValue (minTime));
 	t->SetAttribute ("Max", DoubleValue (maxTime));
 
-	int number = 720;
-	int randomTime[1000]={0,};
-	int randomSid[1000]={0,};
+	int number = 7;
+	int randomTime[50]={0,};
+	int randomSid[50]={0,};
 	for(int i = 0; i<number ; i++){
 	  randomSid[i] = x->GetInteger();
 	}
@@ -119,29 +122,28 @@ int main(void)
 	  randomTime[i] =t->GetInteger();
 	}
 
+	// int random[50]={0};
+	// for(int i=0;i<50;i++){
+	//  	random[i]=x->GetInteger();
+	//  }
+	
 	 Ptr<Packet> packet = Create<Packet> (100);
 	 for(int i=0;i<number;i++){
 	 	std::cout<<randomTime[i]<<","<<randomSid[i]<<std::endl;
-	  	Simulator::Schedule(Seconds(randomTime[i]),&SimpleNetDevice::OriginalTransmission,dev[randomSid[i]],packet,false);
+	  	Simulator::Schedule(Seconds(randomTime[i]),&SimpleNetDevice::OriginalTransmission,dev[randomSid[i]],packet,0,0);
 	}
 
-
-  // Ptr<Packet> p = Create<Packet> (100);
-  // for(int i = 1; i<numNode-1;i++){
-  // 	  Simulator::Schedule(Seconds(0.0),&SimpleNetDevice::OriginalTransmission,dev[i],p);
-
-  // }
-	// for(int i = 1; i<numNode-1;i++){
-	// 	Simulator::Schedule(Seconds(2000.0),&SimpleNetDevice::Print,dev[i]);
-	// }
+	for(int i = 1; i<numNode-1;i++){
+		Simulator::Schedule(Seconds(300.0),&SimpleNetDevice::Print,dev[i]);
+	}
 
 
     
  //    Ptr<Packet> packet = Create<Packet> (100);
- // 	Simulator::Schedule(Seconds(0.0),&SimpleNetDevice::OriginalTransmission,dev[2],packet,false);
+ // 	Simulator::Schedule(Seconds(0.0),&SimpleNetDevice::OriginalTransmit,dev[2],packet,0);
  // 	Ptr<Packet> packet2 = Create<Packet> (100);
- // 	Simulator::Schedule(Seconds(0.0),&SimpleNetDevice::OriginalTransmission,dev[4],packet2,false);
-	// // Ptr<Packet> packet3 = Create<Packet> (100);
+ // 	Simulator::Schedule(Seconds(0.0),&SimpleNetDevice::OriginalTransmit,dev[3],packet2,0);
+	// Ptr<Packet> packet3 = Create<Packet> (100);
 	// Simulator::Schedule(Seconds(0.0),&SimpleNetDevice::OriginalTransmit,dev[4],packet3,0);
 	// Ptr<Packet> packet4 = Create<Packet> (100);
 	// Simulator::Schedule(Seconds(0.0),&SimpleNetDevice::OriginalTransmit,dev[5],packet4,0);
@@ -213,19 +215,11 @@ int main(void)
 	}
 	*/
     // Node Configuration -- end
+	RngSeedManager::SetSeed(10);
 
     Simulator::Run ();
   
 	Simulator::Destroy ();
-	int count = 0;
-	int nc_count = 0;
-	for(int i = 0; i<numNode-1; i++){
-		count +=dev[i]->n_count/2;
-		nc_count += dev[i]->n_ncCount;
-	}
-
-	std::cout << "count -> "<<count-nc_count << std::endl;
-	std::cout << "nc count -> "<<nc_count<<std::endl;
 
 	// uint16_t systemSendCount =0;
 	// uint16_t systemRetransferCount = 0;
