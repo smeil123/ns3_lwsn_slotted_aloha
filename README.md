@@ -9,3 +9,6 @@ NS-3 오픈소스를 활용하여 시뮬레이션을 구축하였으며, 수정�
 
 ## 주요 코드
 * src/network/utils/simple-net-device.cc
+* src/network/utils/simple-net-device.h
+* src/network/model/lwsn-header.cc
+* src/network/utils/simple-net-device.h
